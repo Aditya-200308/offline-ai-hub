@@ -241,7 +241,7 @@ class LocalLLMEngine:
         for m_name in models_to_try:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}" if api_key else f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent"
-                r = requests.post(url, headers=headers, json=payload, timeout=12)
+                r = requests.post(url, headers=headers, json=payload, timeout=30)
                 if r.status_code == 200:
                     data = r.json()
                     candidates = data.get("candidates", [])
