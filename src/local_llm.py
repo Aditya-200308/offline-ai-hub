@@ -213,11 +213,6 @@ class LocalLLMEngine:
             except Exception:
                 pass
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}" if api_key else "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["x-goog-api-key"] = api_key
-
         formatted_parts = [f"System: {system_prompt}"]
         if history:
             for item in history:
@@ -230,59 +225,68 @@ class LocalLLMEngine:
             "contents": [{"parts": [{"text": combined_prompt}]}],
             "generationConfig": {"temperature": temperature}
         }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["x-goog-api-key"] = api_key
 
-        try:
-            r = requests.post(url, headers=headers, json=payload, timeout=30)
-            end_time = time.perf_counter()
-            total_latency = end_time - start_time
+        # Priority order: Try latest Gemini 3.8 Flash -> Fallback to 3.7 Flash -> Fallback to 3.6/3.5 Flash
+        models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
+        last_error = "No API key configured."
 
-            if r.status_code == 200:
-                data = r.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                
-                # Approximate token counts
-                token_count = len(text.split()) * 1.3
-                prompt_tokens = len(prompt.split()) * 1.3
-                tps = token_count / total_latency if total_latency > 0 else 35.0
+        for m_name in models_to_try:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}" if api_key else f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent"
+                r = requests.post(url, headers=headers, json=payload, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if text:
+                            end_time = time.perf_counter()
+                            total_latency = end_time - start_time
+                            token_count = len(text.split()) * 1.3
+                            prompt_tokens = len(prompt.split()) * 1.3
+                            tps = token_count / total_latency if total_latency > 0 else 35.0
 
-                if stream_callback:
-                    stream_callback(text)
+                            if stream_callback:
+                                stream_callback(text)
 
-                return {
-                    "response": text,
-                    "engine": "Cloud Fallback (Gemini Flash)",
-                    "model": f"gemini-2.0-flash (simulating {model})",
-                    "tokens_generated": int(token_count),
-                    "prompt_tokens": int(prompt_tokens),
-                    "tokens_per_sec": round(tps, 2),
-                    "ttft_ms": round(total_latency * 350, 2),
-                    "total_latency_s": round(total_latency, 3),
-                    "privacy_verified": False
-                }
-            else:
-                raise RuntimeError(f"API Error {r.status_code}: {r.text}")
-        except Exception as e:
-            # Offline mock synthesizer if completely disconnected
-            end_time = time.perf_counter()
-            total_latency = end_time - start_time
-            mock_text = (
-                f"[OFFLINE SIMULATED RESPONSE]\n\n"
-                f"Analysis of query: '{prompt[:120]}...'\n\n"
-                f"1. Running locally on your device.\n"
-                f"2. Local inference pipeline executed.\n"
-                f"3. Model: {model} | Deterministic output synthesized."
-            )
-            if stream_callback:
-                stream_callback(mock_text)
-            
-            return {
-                "response": mock_text,
-                "engine": "Offline Sandbox (Simulated)",
-                "model": model,
-                "tokens_generated": len(mock_text.split()),
-                "prompt_tokens": len(prompt.split()),
-                "tokens_per_sec": 42.5,
-                "ttft_ms": 115.0,
-                "total_latency_s": round(total_latency, 3),
-                "privacy_verified": True
-            }
+                            return {
+                                "response": text,
+                                "engine": "Cloud Fallback (Gemini Flash)",
+                                "model": f"{m_name} (simulating {model})",
+                                "tokens_generated": int(token_count),
+                                "prompt_tokens": int(prompt_tokens),
+                                "tokens_per_sec": round(tps, 2),
+                                "ttft_ms": round(total_latency * 350, 2),
+                                "total_latency_s": round(total_latency, 3),
+                                "privacy_verified": False
+                            }
+                else:
+                    last_error = f"HTTP {r.status_code}: {r.text[:150]}"
+            except Exception as ex:
+                last_error = str(ex)
+                continue
+
+        # Offline simulated fallback if completely disconnected or invalid key
+        end_time = time.perf_counter()
+        total_latency = end_time - start_time
+        mock_text = (
+            f"⚠️ **Cloud Fallback Notice**: API call did not succeed ({last_error}).\n\n"
+            f"Please ensure `GEMINI_API_KEY` is configured in Streamlit Cloud Secrets (`Settings ➔ Secrets`)."
+        )
+        if stream_callback:
+            stream_callback(mock_text)
+        
+        return {
+            "response": mock_text,
+            "engine": "Offline Sandbox (Simulated)",
+            "model": model,
+            "tokens_generated": len(mock_text.split()),
+            "prompt_tokens": len(prompt.split()),
+            "tokens_per_sec": 42.5,
+            "ttft_ms": 115.0,
+            "total_latency_s": round(total_latency, 3),
+            "privacy_verified": False
+        }
