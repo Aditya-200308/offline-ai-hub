@@ -229,14 +229,19 @@ class LocalLLMEngine:
         if api_key:
             headers["x-goog-api-key"] = api_key
 
-        # Priority order: Try latest Gemini 3.8 Flash -> Fallback to 3.7 Flash -> Fallback to 3.6/3.5 Flash
-        models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
+        # Multi-Tier Active Google Roster: Gemini 3.8 Flash -> 3.7 Flash -> 3.6 Flash -> Gemini Flash Latest
+        models_to_try = [
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-flash-latest"
+        ]
         last_error = "No API key configured."
 
         for m_name in models_to_try:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}" if api_key else f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent"
-                r = requests.post(url, headers=headers, json=payload, timeout=15)
+                r = requests.post(url, headers=headers, json=payload, timeout=12)
                 if r.status_code == 200:
                     data = r.json()
                     candidates = data.get("candidates", [])
